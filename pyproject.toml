@@ -1,0 +1,14 @@
+[project]
+name = "image-lab"
+version = "0.1.0"
+description = "Plotting workspace for RL, IL, and RL+IL locomotion experiments."
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "matplotlib>=3.8",
+    "tensorboard>=2.16",
+]
+
+[tool.uv]
+package = false
