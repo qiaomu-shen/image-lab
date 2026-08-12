@@ -1,0 +1,59 @@
+--- git commit ---
+fa314e2f6cd5e57f392474ebf6da85476dfa9462
+
+
+--- git status ---
+On branch main
+Your branch is ahead of 'origin/main' by 3 commits.
+  (use "git push" to publish your local commits)
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   src/mjlab/tasks/velocity/config/g1/rl_cfg.py
+	modified:   tests/test_velocity_task.py
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/src/mjlab/tasks/velocity/config/g1/rl_cfg.py b/src/mjlab/tasks/velocity/config/g1/rl_cfg.py
+index 0eb85bf6..194601a9 100644
+--- a/src/mjlab/tasks/velocity/config/g1/rl_cfg.py
++++ b/src/mjlab/tasks/velocity/config/g1/rl_cfg.py
+@@ -126,14 +126,14 @@ def unitree_g1_blind_rough_teacherkl_runner_cfg() -> RslRlTeacherKLRunnerCfg:
+         enabled=True,
+         checkpoint_path=G1_TEACHER_KL_CHECKPOINT,
+         loss_type="mean_huber",
+-        lambda_start=0.05,
++        lambda_start=0.03,
+         lambda_end=0.0,
+         warmup_iters=1000,
+         constant_iters=0,
+-        anneal_iters=8000,
++        anneal_iters=10000,
+         schedule="cosine",
+         huber_delta=0.5,
+-        max_teacher_loss=3.0,
++        max_teacher_loss=None,
+         max_kl_loss=None,
+         max_kl_loss_tail_slope=0.0,
+         check_shapes=True,
+diff --git a/tests/test_velocity_task.py b/tests/test_velocity_task.py
+index 10406eec..72e5a976 100644
+--- a/tests/test_velocity_task.py
++++ b/tests/test_velocity_task.py
+@@ -255,10 +255,10 @@ def test_teacherkl_uses_delayed_mean_huber_guidance() -> None:
+     assert cfg.obs_groups["teacher"] == ("teacher", "camera")
+     assert teacher_cfg.enabled is True
+     assert teacher_cfg.loss_type == "mean_huber"
+-    assert teacher_cfg.lambda_start == 0.05
++    assert teacher_cfg.lambda_start == 0.03
+     assert teacher_cfg.lambda_end == 0.0
+     assert teacher_cfg.warmup_iters == 1000
+-    assert teacher_cfg.anneal_iters == 8000
++    assert teacher_cfg.anneal_iters == 12000
+     assert teacher_cfg.huber_delta == 0.5
+-    assert teacher_cfg.max_teacher_loss == 3.0
++    assert teacher_cfg.max_teacher_loss is None
+     assert teacher_cfg.max_kl_loss is None
