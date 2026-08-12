@@ -1,0 +1,247 @@
+--- git commit ---
+56038ec60b7bf586787674be7d51e522f7390fc9
+
+
+--- git status ---
+On branch main
+Your branch is ahead of 'origin/main' by 2 commits.
+  (use "git push" to publish your local commits)
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   src/mjlab/rl/config.py
+	modified:   src/mjlab/tasks/velocity/config/g1/rl_cfg.py
+	modified:   tests/test_velocity_task.py
+	modified:   third_party/rsl_rl/rsl_rl/algorithms/ppo_teacher_kl.py
+	modified:   third_party/rsl_rl/tests/algorithms/test_ppo_teacher_kl.py
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/src/mjlab/rl/config.py b/src/mjlab/rl/config.py
+index a74deed8..33f7087f 100644
+--- a/src/mjlab/rl/config.py
++++ b/src/mjlab/rl/config.py
+@@ -89,6 +89,8 @@ class RslRlPpoAlgorithmCfg:
+ class RslRlTeacherKLCfg:
+   """Config for frozen-teacher guidance regularization."""
+ 
++  enabled: bool = True
++  """Whether to enable frozen-teacher guidance. False makes PPOTeacherKL run as pure PPO."""
+   checkpoint_path: str | None = None
+   """Path to the rsl-rl teacher checkpoint containing ``actor_state_dict``."""
+   loss_type: Literal["kl", "mean_mse", "mean_huber"] = "kl"
+diff --git a/src/mjlab/tasks/velocity/config/g1/rl_cfg.py b/src/mjlab/tasks/velocity/config/g1/rl_cfg.py
+index 5f59597b..0eb85bf6 100644
+--- a/src/mjlab/tasks/velocity/config/g1/rl_cfg.py
++++ b/src/mjlab/tasks/velocity/config/g1/rl_cfg.py
+@@ -123,6 +123,7 @@ def unitree_g1_blind_rough_teacherkl_runner_cfg() -> RslRlTeacherKLRunnerCfg:
+       desired_kl=0.01,
+       max_grad_norm=1.0,
+       teacher_kl_cfg=RslRlTeacherKLCfg(
++        enabled=True,
+         checkpoint_path=G1_TEACHER_KL_CHECKPOINT,
+         loss_type="mean_huber",
+         lambda_start=0.05,
+diff --git a/tests/test_velocity_task.py b/tests/test_velocity_task.py
+index 6cd7bdec..10406eec 100644
+--- a/tests/test_velocity_task.py
++++ b/tests/test_velocity_task.py
+@@ -253,11 +253,12 @@ def test_teacherkl_uses_delayed_mean_huber_guidance() -> None:
+   for cfg in (velocity_cfg, target_cfg):
+     teacher_cfg = cfg.algorithm.teacher_kl_cfg
+     assert cfg.obs_groups["teacher"] == ("teacher", "camera")
++    assert teacher_cfg.enabled is True
+     assert teacher_cfg.loss_type == "mean_huber"
+-    assert teacher_cfg.lambda_start == 0.03
+-    assert teacher_cfg.lambda_end == 0.005
+-    assert teacher_cfg.warmup_iters == 1500
+-    assert teacher_cfg.anneal_iters == 20000
++    assert teacher_cfg.lambda_start == 0.05
++    assert teacher_cfg.lambda_end == 0.0
++    assert teacher_cfg.warmup_iters == 1000
++    assert teacher_cfg.anneal_iters == 8000
+     assert teacher_cfg.huber_delta == 0.5
+     assert teacher_cfg.max_teacher_loss == 3.0
+     assert teacher_cfg.max_kl_loss is None
+diff --git a/third_party/rsl_rl/rsl_rl/algorithms/ppo_teacher_kl.py b/third_party/rsl_rl/rsl_rl/algorithms/ppo_teacher_kl.py
+index 61fcf6db..ce365f55 100644
+--- a/third_party/rsl_rl/rsl_rl/algorithms/ppo_teacher_kl.py
++++ b/third_party/rsl_rl/rsl_rl/algorithms/ppo_teacher_kl.py
+@@ -44,6 +44,7 @@ class PPOTeacherKL(PPO):
+         self.teacher_loaded = False
+         self.teacher_kl_cfg = dict(teacher_kl_cfg or {})
+         self._teacher_kl_shapes_checked = False
++        self.teacher_guidance_enabled = bool(self.teacher_kl_cfg.get("enabled", True))
+ 
+         # Allow checkpoint path to be supplied either inside teacher_kl_cfg or as a direct keyword.
+         self.teacher_checkpoint_path: str | None = None
+@@ -67,6 +68,7 @@ class PPOTeacherKL(PPO):
+ 
+         self.teacher_kl_cfg.update(
+             {
++                "enabled": self.teacher_guidance_enabled,
+                 "loss_type": self.teacher_guidance_loss_type,
+                 "lambda_start": self.teacher_kl_lambda_start,
+                 "lambda_end": self.teacher_kl_lambda_end,
+@@ -294,6 +296,15 @@ class PPOTeacherKL(PPO):
+         distribution_params: tuple[torch.Tensor, ...],
+     ) -> tuple[torch.Tensor, dict[str, float]]:
+         """Compute the frozen-teacher guidance loss."""
++        if not self.teacher_guidance_enabled:
++            return torch.zeros((), device=self.device), {
++                "teacher_loss": 0.0,
++                "teacher_loss_for_update": 0.0,
++                "teacher_lambda": 0.0,
++                "teacher_kl_lambda": 0.0,
++                "teacher_guidance_enabled": 0.0,
++            }
++
+         if self.teacher is None or not self.teacher_loaded:
+             raise RuntimeError("Teacher KL loss requires a loaded teacher model.")
+         if batch.observations is None:
+@@ -408,16 +419,25 @@ class PPOTeacherKL(PPO):
+         critic_cfg = copy.deepcopy(cfg["critic"])
+         teacher_cfg = copy.deepcopy(cfg.get("teacher", cfg["actor"]))
+         obs_groups_cfg = copy.deepcopy(cfg["obs_groups"])
++        teacher_guidance_cfg = algorithm_cfg.get("teacher_kl_cfg") or {}
++        teacher_guidance_enabled = bool(teacher_guidance_cfg.get("enabled", True))
+ 
+         # Resolve class callables
+         alg_class: type[PPOTeacherKL] = resolve_callable(algorithm_cfg.pop("class_name"))  # type: ignore
+         actor_class: type[MLPModel] = resolve_callable(actor_cfg.pop("class_name"))  # type: ignore
+         critic_class: type[MLPModel] = resolve_callable(critic_cfg.pop("class_name"))  # type: ignore
+-        teacher_class_name = teacher_cfg.pop("class_name", None)
+-        teacher_class: type[MLPModel] = resolve_callable(teacher_class_name) if teacher_class_name else actor_class
++        if teacher_guidance_enabled:
++            teacher_class_name = teacher_cfg.pop("class_name", None)
++            teacher_class: type[MLPModel] | None = (
++                resolve_callable(teacher_class_name) if teacher_class_name else actor_class
++            )
++        else:
++            teacher_class = None
+ 
+         # Resolve observation groups
+-        default_sets = ["actor", "critic", "teacher"]
++        default_sets = ["actor", "critic"]
++        if teacher_guidance_enabled:
++            default_sets.append("teacher")
+         if "rnd_cfg" in algorithm_cfg and algorithm_cfg["rnd_cfg"] is not None:
+             default_sets.append("rnd_state")
+         obs_groups = resolve_obs_groups(obs, obs_groups_cfg, default_sets)
+@@ -435,10 +455,16 @@ class PPOTeacherKL(PPO):
+             critic_cfg["cnns"] = actor.cnns  # type: ignore
+         critic: MLPModel = critic_class(obs, obs_groups, "critic", 1, **critic_cfg).to(device)
+         print(f"Critic Model: {critic}")
+-        teacher: MLPModel = teacher_class(obs, obs_groups, "teacher", env.num_actions, **teacher_cfg).to(device)
+-        if teacher.is_recurrent:
+-            raise ValueError("PPOTeacherKL currently supports feedforward teacher actors only.")
+-        print(f"Teacher Model: {teacher}")
++        teacher: MLPModel | None = None
++        if teacher_guidance_enabled:
++            if teacher_class is None:
++                raise RuntimeError("teacher_class should be resolved when teacher guidance is enabled.")
++            teacher = teacher_class(obs, obs_groups, "teacher", env.num_actions, **teacher_cfg).to(device)
++            if teacher.is_recurrent:
++                raise ValueError("PPOTeacherKL currently supports feedforward teacher actors only.")
++            print(f"Teacher Model: {teacher}")
++        else:
++            print("Teacher guidance disabled: training with PPO loss only.")
+ 
+         # Initialize the storage
+         storage = RolloutStorage("rl", env.num_envs, cfg["num_steps_per_env"], obs, [env.num_actions], device)
+@@ -448,8 +474,9 @@ class PPOTeacherKL(PPO):
+         alg: PPOTeacherKL = alg_class(
+             actor, critic, storage, device=device, **algorithm_cfg, multi_gpu_cfg=cfg["multi_gpu"]
+         )
+-        alg.teacher = teacher
+-        alg.load_teacher_checkpoint()
++        if teacher is not None:
++            alg.teacher = teacher
++            alg.load_teacher_checkpoint()
+ 
+         # Compile the algorithm's learnable models if requested. The teacher remains an uncompiled frozen reference.
+         alg.compile(cfg.get("torch_compile_mode"))
+diff --git a/third_party/rsl_rl/tests/algorithms/test_ppo_teacher_kl.py b/third_party/rsl_rl/tests/algorithms/test_ppo_teacher_kl.py
+index 74b3bc95..7e9a988b 100644
+--- a/third_party/rsl_rl/tests/algorithms/test_ppo_teacher_kl.py
++++ b/third_party/rsl_rl/tests/algorithms/test_ppo_teacher_kl.py
+@@ -15,6 +15,11 @@ OBS_DIM = 8
+ NUM_ACTIONS = 3
+ 
+ 
++class _DummyEnv:
++    num_actions = NUM_ACTIONS
++    num_envs = NUM_ENVS
++
++
+ def _build_teacher_kl(loss_cfg: dict) -> PPOTeacherKL:
+     obs = TensorDict(
+         {
+@@ -76,3 +81,64 @@ def test_mean_huber_guidance_applies_loss_cap() -> None:
+     assert loss.item() == 0.25
+     assert logs["teacher_loss_for_update"].item() == 0.25
+     assert logs["teacher_mean_huber"].item() > loss.item()
++
++
++def test_disabled_guidance_runs_without_teacher() -> None:
++    """Disabled teacher guidance should reduce the additional loss to zero."""
++    alg = _build_teacher_kl({"enabled": False})
++
++    loss, logs = alg._compute_additional_loss(
++        batch=None,  # type: ignore[arg-type]
++        original_batch_size=0,
++        distribution_params=(),
++    )
++
++    assert loss.item() == 0.0
++    assert logs["teacher_loss"] == 0.0
++    assert logs["teacher_loss_for_update"] == 0.0
++    assert logs["teacher_kl_lambda"] == 0.0
++    assert logs["teacher_guidance_enabled"] == 0.0
++
++
++def test_construct_disabled_guidance_skips_teacher_loading() -> None:
++    """Disabled teacher guidance should not construct or load the teacher."""
++    obs = TensorDict(
++        {
++            "actor": torch.zeros(NUM_ENVS, OBS_DIM),
++            "critic": torch.zeros(NUM_ENVS, OBS_DIM),
++            "teacher": torch.zeros(NUM_ENVS, OBS_DIM),
++            "camera": torch.zeros(NUM_ENVS, 1, 8, 8),
++        },
++        batch_size=[NUM_ENVS],
++    )
++    cfg = {
++        "algorithm": {
++            "class_name": "PPOTeacherKL",
++            "teacher_kl_cfg": {"enabled": False},
++        },
++        "actor": {
++            "class_name": "MLPModel",
++            "hidden_dims": [16],
++            "distribution_cfg": {"class_name": "GaussianDistribution"},
++        },
++        "critic": {"class_name": "MLPModel", "hidden_dims": [16]},
++        "teacher": {
++            "class_name": "MLPModel",
++            "hidden_dims": [16],
++            "distribution_cfg": {"class_name": "GaussianDistribution"},
++        },
++        "obs_groups": {
++            "actor": ["actor"],
++            "critic": ["critic"],
++            "teacher": ["teacher", "camera"],
++        },
++        "num_steps_per_env": NUM_STEPS,
++        "multi_gpu": None,
++        "torch_compile_mode": None,
++    }
++
++    alg = PPOTeacherKL.construct_algorithm(obs, _DummyEnv(), cfg, "cpu")
++
++    assert alg.teacher_guidance_enabled is False
++    assert alg.teacher is None
++    assert alg.teacher_loaded is False
