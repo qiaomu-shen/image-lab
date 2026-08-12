@@ -1,0 +1,81 @@
+Mjlab-Velocity-Blind-Rough-TeacherKL-Unitree-G1有三个对照实验
+纯ppo：
+uv run python -m mjlab.scripts.train Mjlab-Velocity-Blind-Rough-TeacherKL-Unitree-G1 \
+  --agent.algorithm.teacher-kl-cfg.enabled False \
+  --env.scene.num-envs 2048 \
+  --agent.logger tensorboard 
+kl：
+uv run python -m mjlab.scripts.train Mjlab-Velocity-Blind-Rough-TeacherKL-Unitree-G1 \
+  --env.scene.num-envs 2048 \
+  --agent.logger tensorboard 
+纯il：
+uv run python -m mjlab.scripts.train Mjlab-Velocity-Blind-Rough-TeacherKL-Unitree-G1 \
+  --agent.algorithm.teacher-kl-cfg.imitation-only True \
+  --env.scene.num-envs 2048 \
+  --agent.logger tensorboard \
+  --agent.seed 42
+
+曲线可视化：
+tensorboard --logdir logs/rsl_rl/g1_blind_rough_teacherkl
+
+续训：
+uv run train Mjlab-Velocity-Blind-StairsFlag-TeacherKL-Unitree-G1 \
+  --agent.resume True \
+  --agent.load-run 2026-05-28_11-56-54 \
+  --agent.load-checkpoint model_5850.pt \
+  --agent.logger tensorboard \
+  --env.scene.num-envs 2048
+
+play：
+uv run play Mjlab-Velocity-Blind-StairsFlag-TeacherKL-Unitree-G1 \
+  --checkpoint-file logs/rsl_rl/g1_blind_stairs_flag_teacherkl/Mjlab-Velocity-Blind-StairsFlag-TeacherKL-Unitree-G1/2026-05-29_13-05-08/model_0.pt \
+  --num-envs 16
+
+是否续训在一个文件夹：
+--resume-new-run True
+
+
+部署相关：
+启动控制
+1，执行以下命令重新编译：
+ cd deploy/robots/g1    
+mkdir -p build && cd build
+cmake .. && make  如果有build文件夹直接编译即可
+
+2，机器人先进入调试模式：
+执行cd deploy/robots/g1/build 进入build文件夹，
+运行 ./g1_ctrl –network=eth0
+
+
+评估相关：
+聚类：
+uv run python scripts/velocity_eval/collect_policy_latents.py \
+  Mjlab-Velocity-Blind-Rough-TeacherKL-Unitree-G1 \
+  --checkpoint-file logs/rsl_rl/g1_blind_rough_teacherkl/Mjlab-Velocity-Blind-Rough-TeacherKL-Unitree-G1/2st_5.9_5.13deployed/model_72250.pt \
+  --terrain-set cluster_v1 \
+  --episodes-per-terrain 20 \
+  --num-envs 20 \
+  --steps-per-episode 500 \
+  --sample-every 1
+
+  uv run python scripts/velocity_eval/analyze_latent_clusters.py \
+  --input-file eval_outputs/velocity/0527_143012/latents_cluster_v1.npz \
+  --phase-bins 8
+
+统计指标：
+  uv run python scripts/velocity_eval/eval_policy_goal_pyramid.py \
+  Mjlab-Velocity-Blind-Rough-LSTM-TeacherKL-Unitree-G1 \
+  --checkpoint-file logs/rsl_rl/g1_blind_rough_lstm_teacherkl/Mjlab-Velocity-Blind-Rough-LSTM-TeacherKL-Unitree-G1/5.25deployed/model_14800.pt \
+  --episodes 50 \
+  --num-envs 50 \
+  --max-episode-length-s 12.0 \
+  --output-file eval_outputs/velocity
+
+play：
+  uv run python scripts/velocity_eval/eval_policy_goal_pyramid.py \
+  Mjlab-Velocity-Blind-Rough-LSTM-TeacherKL-Unitree-G1 \
+  --checkpoint-file logs/rsl_rl/g1_blind_rough_lstm_teacherkl/Mjlab-Velocity-Blind-Rough-LSTM-TeacherKL-Unitree-G1/5.25deployed/model_14800.pt \
+  --play \
+  --num-envs 4 \
+  --max-episode-length-s 12.0
+

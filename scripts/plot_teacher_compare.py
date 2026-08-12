@@ -61,7 +61,7 @@ def choose_tag(run_dir: str | Path, query: str) -> str:
 
 def load_scalar(run_dir: str | Path, metric_query: str) -> pd.DataFrame:
     run_dir = Path(run_dir).expanduser().resolve()
-    tag = choose_tag(run_dir, metric_query)
+    tag = metric_query if "/" in metric_query else choose_tag(run_dir, metric_query)
 
     frames = []
     for d in find_event_dirs(run_dir):
@@ -84,6 +84,8 @@ def load_scalar(run_dir: str | Path, metric_query: str) -> pd.DataFrame:
             continue
 
     if not frames:
+        if "/" in metric_query:
+            choose_tag(run_dir, metric_query)
         raise RuntimeError(f"No scalar data found for tag '{tag}' in {run_dir}")
 
     df = pd.concat(frames, ignore_index=True)
@@ -114,12 +116,72 @@ def parse_run_arg(s: str) -> tuple[str, str]:
     return label.strip(), path.strip()
 
 
+def parse_color_args(items: list[str] | None) -> dict[str, str]:
+    colors = {}
+    for item in items or []:
+        if "=" not in item:
+            raise ValueError(f"Invalid color argument: {item}. Use Label=#RRGGBB")
+        label, color = item.split("=", 1)
+        colors[label.strip()] = color.strip()
+    return colors
+
+
+def parse_artifact_intervals(items: list[str] | None) -> list[tuple[str, float, float]]:
+    intervals = []
+    for item in items or []:
+        parts = item.split(":")
+        if len(parts) != 3:
+            raise ValueError(
+                f"Invalid artifact interval: {item}. Use match:start_step:end_step"
+            )
+        match, start, end = parts
+        intervals.append((match, float(start), float(end)))
+    return intervals
+
+
+def correct_resume_artifacts(
+    df: pd.DataFrame,
+    run_path: str,
+    intervals: list[tuple[str, float, float]],
+) -> pd.DataFrame:
+    if not intervals:
+        return df
+
+    corrected = df.copy()
+    run_path = str(run_path)
+
+    for match, start, end in intervals:
+        if match not in run_path:
+            continue
+
+        mask = (corrected["step"] >= start) & (corrected["step"] <= end)
+        if not mask.any():
+            continue
+
+        before = corrected[corrected["step"] < start].tail(1)
+        after = corrected[corrected["step"] > end].head(1)
+        if before.empty or after.empty:
+            continue
+
+        x0 = float(before["step"].iloc[0])
+        x1 = float(after["step"].iloc[0])
+        y0 = float(before["value"].iloc[0])
+        y1 = float(after["value"].iloc[0])
+        steps = corrected.loc[mask, "step"].to_numpy()
+        corrected.loc[mask, "value"] = np.interp(steps, [x0, x1], [y0, y1])
+
+    return corrected
+
+
 def plot_grouped_runs(args: argparse.Namespace) -> None:
     grouped: dict[str, list[pd.DataFrame]] = defaultdict(list)
+    colors = parse_color_args(args.colors)
+    artifact_intervals = parse_artifact_intervals(args.artifact_intervals)
 
     for item in args.runs:
         label, path = parse_run_arg(item)
         df = load_scalar(path, args.metric)
+        df = correct_resume_artifacts(df, path, artifact_intervals)
 
         if args.x_max is not None:
             df = df[df["step"] <= args.x_max]
@@ -148,11 +210,12 @@ def plot_grouped_runs(args: argparse.Namespace) -> None:
     fig, ax = plt.subplots(figsize=(args.width, args.height))
 
     for label, runs in grouped.items():
+        color = colors.get(label)
         if len(runs) == 1:
             df = runs[0]
             x = df["step"].to_numpy()
             y = smooth(df["value"].to_numpy(), args.smooth)
-            ax.plot(x, y, label=label, linewidth=args.linewidth)
+            ax.plot(x, y, label=label, linewidth=args.linewidth, color=color)
         else:
             max_common_step = min(df["step"].max() for df in runs)
             min_common_step = max(df["step"].min() for df in runs)
@@ -168,8 +231,23 @@ def plot_grouped_runs(args: argparse.Namespace) -> None:
             mean = ys.mean(axis=0)
             std = ys.std(axis=0)
 
-            ax.plot(grid, mean, label=f"{label} mean", linewidth=args.linewidth)
-            ax.fill_between(grid, mean - std, mean + std, alpha=args.alpha)
+            ax.fill_between(
+                grid,
+                mean - std,
+                mean + std,
+                alpha=args.alpha,
+                color=color,
+                linewidth=0,
+                zorder=1,
+            )
+            ax.plot(
+                grid,
+                mean,
+                label=label,
+                linewidth=args.linewidth,
+                color=color,
+                zorder=2,
+            )
 
     ax.set_xlabel(args.xlabel)
     ax.set_ylabel(args.ylabel if args.ylabel else args.metric)
@@ -205,6 +283,8 @@ def main() -> None:
     parser.add_argument("--xlabel", type=str, default="Training iteration / step")
     parser.add_argument("--ylabel", type=str, default=None)
     parser.add_argument("--title", type=str, default=None)
+    parser.add_argument("--colors", nargs="*", default=[])
+    parser.add_argument("--artifact-intervals", nargs="*", default=[])
 
     parser.add_argument("--width", type=float, default=5.2)
     parser.add_argument("--height", type=float, default=3.4)

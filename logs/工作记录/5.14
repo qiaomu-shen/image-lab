@@ -1,0 +1,9 @@
+修改baseheight 0.74  weight：-3，scale 10 续训练
+idel penalty -2---1  
+logs/rsl_rl/g1_blind_rough_teacherkl/Mjlab-Velocity-Blind-Rough-TeacherKL-Unitree-G1/2026-05-13_15-09-08_1st_5.9/model_58550.pt
+2st_5.9
+
+修改hippitch 0.4
+ankle_pitch. 0.15
+clearance 0.25
+baseheight -10，-2

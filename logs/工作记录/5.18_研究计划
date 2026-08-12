@@ -1,0 +1,750 @@
+下面我按你的当前状态重新整理一版**可执行任务清单**。
+
+你现在已经有：
+
+| 已完成内容                             | 状态         |
+| --------------------------------- | ---------- |
+| Privileged teacher policy         | 已有，带感知，效果好 |
+| MLP-H3 + TeacherKL blind baseline | 已训练        |
+| MLP-H3 实机部署                       | 已成功        |
+| MLP-H3 上 4 层楼梯视频                  | 已有         |
+
+接下来目标是：
+
+> 在 8 月底前拿完实机结果；之后只补仿真、分析、写作。
+
+---
+
+# 总体优先级
+
+## 最高优先级 P0：保住已有成果
+
+| 任务                                      | 是否实机 | 目的         |
+| --------------------------------------- | ---: | ---------- |
+| 冻结当前 MLP-H3 checkpoint/config/yaml/ONNX |    否 | 保底结果不能丢    |
+| 补 MLP-H3 实机统计                           |    是 | 视频变成论文数据   |
+| 写统一 eval 脚本                             |    否 | 后续所有模型公平比较 |
+| 定义所有指标                                  |    否 | 防止后面数据混乱   |
+
+---
+
+## 高优先级 P1：普通 memory baseline
+
+| 任务                          |        是否实机 | 目的                          |
+| --------------------------- | ----------: | --------------------------- |
+| MLP-H16 + TeacherKL         |   仿真必须，实机可选 | 公平对比 Transformer-H16        |
+| LSTM + TeacherKL            | 仿真必须，实机建议必须 | recurrent memory 主 baseline |
+| Transformer-H16 + TeacherKL | 仿真必须，实机建议必须 | attention memory 主 baseline |
+
+---
+
+## 高优先级 P2：显式 stair latent 方法
+
+| 任务                                          |      是否实机 | 目的                            |
+| ------------------------------------------- | --------: | ----------------------------- |
+| Transformer-H16 + auxiliary prediction head |      仿真即可 | 验证 hidden state 是否能预测地形       |
+| Transformer-H16 + explicit stair latent     | 仿真必须，实机最好 | 你的主要创新方法                      |
+| LSTM + stair latent                         | 仿真建议，实机可选 | 证明 latent 不只是对 Transformer 有用 |
+
+---
+
+## 低优先级 P3：补充实验
+
+| 任务                           | 是否实机 | 目的         |
+| ---------------------------- | ---: | ---------- |
+| KL 超参数                       |    否 | supplement |
+| terrain height sweep         |    否 | supplement |
+| friction/noise/delay sweep   |    否 | supplement |
+| MLP-H1                       |    否 | 证明单帧失败     |
+| attention / hidden state PCA |    否 | 分析图        |
+| stair A → flat → stair B     | 仿真为主 | 展示在线适应     |
+
+---
+
+# 第一阶段：立刻完成 MLP-H3 保底数据
+
+## 1. 冻结当前成功版本
+
+必须保存：
+
+```text
+MLP-H3 checkpoint
+训练 config
+TeacherKL config
+terrain config
+obs 顺序
+action scale
+ONNX / TorchScript
+deploy yaml
+joint_ids_map
+stiffness / damping
+step_dt
+实机运行命令
+```
+
+这一步非常重要。
+不要后面改 reward、改 obs、改 deploy 后找不到“成功上楼版本”。
+
+---
+
+## 2. 补 MLP-H3 实机统计
+
+你现在有视频，但论文需要表格。
+
+建议补：
+
+| 实机实验        | trial 数 |
+| ----------- | ------: |
+| 平地前进 vx=0.2 |       5 |
+| 停止响应        |       5 |
+| 左右转向        | 左 3，右 3 |
+| 上楼梯 4 层     |       5 |
+| RL 切换安全     |       5 |
+| 零命令站稳       |       3 |
+
+记录：
+
+| 指标                | 说明          |
+| ----------------- | ----------- |
+| success / failure | 是否完成        |
+| fall / shutdown   | 是否摔倒或保护停机   |
+| stairs climbed    | 成功上了几级      |
+| time to finish    | 完成时间        |
+| visible toe scuff | 视频人工标注即可    |
+| notes             | 比如踢台阶、偏航、停顿 |
+
+实机里**不要强行统计精确 toe collision rate**。如果没有可靠接触力数据，用视频人工标注：
+
+```text
+none / mild / severe toe scuffing
+```
+
+即可。
+
+---
+
+# 第二阶段：统一仿真评估脚本
+
+这是所有后续实验的基础。
+
+## 3. 写统一 eval 环境
+
+所有模型都在同一个 eval 脚本下跑：
+
+```text
+Teacher
+MLP-H3
+MLP-H16
+LSTM
+Transformer-H16
+Transformer-H16 + Latent
+LSTM + Latent
+```
+
+每个模型至少：
+
+```text
+3 seeds
+每个 seed 100–500 episodes evaluation
+```
+
+如果训练很贵，训练 seed 可以少一点，但 evaluation episode 要够。
+
+---
+
+## 4. 仿真指标定义
+
+这些都只需要仿真统计：
+
+| 指标                      | 是否主指标 | 说明       |
+| ----------------------- | ----: | -------- |
+| stair success rate      |   主指标 | 是否通过楼梯   |
+| fall rate               |   主指标 | 摔倒比例     |
+| episode length          |   主指标 | 生存时间     |
+| velocity tracking error |   主指标 | 速度跟踪     |
+| toe collision count     |   主指标 | 脚尖碰撞次数   |
+| toe collision per meter |   主指标 | 更公平      |
+| stumble count           |   主指标 | 踢台阶/水平碰撞 |
+| foot clearance          |   主指标 | 摆动腿高度    |
+| base pitch RMS          |   主指标 | 身体稳定性    |
+| action rate             |   次指标 | 动作平滑     |
+| torque / energy         |   次指标 | 能耗       |
+| foot slip               |   次指标 | 打滑       |
+
+其中你问的：
+
+> 脚碰撞率是不是只在仿真环境里就行？
+
+答案是：
+
+**是的，主要放仿真。**
+
+原因：
+
+1. 仿真能准确拿 contact；
+2. 可以区分 toe / foot / shank / knee；
+3. 可以统计每级楼梯、每米距离、每个 episode；
+4. 实机上没有可靠接触标签时，强行统计会不严谨。
+
+实机只做：
+
+```text
+成功率
+失败类型
+视频标注
+是否明显踢台阶
+```
+
+---
+
+# 第三阶段：MLP-H16 + TeacherKL
+
+## 5. 做 MLP-H16
+
+优先级：**必须做，但先只做仿真。**
+
+作用：
+
+> 排除 Transformer 只是因为看了 16 帧所以更好的质疑。
+
+实验：
+
+| 模型              | history | 说明               |
+| --------------- | ------: | ---------------- |
+| MLP-H3          |       3 | 当前 baseline      |
+| MLP-H16         |      16 | 公平 baseline      |
+| Transformer-H16 |      16 | attention memory |
+
+如果最后结果是：
+
+```text
+Transformer-H16 > MLP-H16 > MLP-H3
+```
+
+你可以说：
+
+> 长历史有帮助，但 attention 结构进一步提升了历史利用效率。
+
+如果结果是：
+
+```text
+MLP-H16 ≈ Transformer-H16
+```
+
+也没关系，说明简单堆叠历史已经很强。
+
+MLP-H16 是否实机？
+
+| 情况            | 是否实机 |
+| ------------- | ---: |
+| 仿真明显强于 MLP-H3 | 可以实机 |
+| 仿真一般          |  不实机 |
+| 时间紧           |  不实机 |
+
+---
+
+# 第四阶段：LSTM + TeacherKL
+
+## 6. 实现普通 LSTM policy
+
+优先级：**非常高。**
+
+原因：
+
+> LSTM 最可能成为比 Transformer 更稳的实机方法。
+
+结构建议：
+
+```text
+obs_t
+  ↓
+LSTM hidden state
+  ↓
+actor head
+  ↓
+action
+```
+
+训练：
+
+```text
+PPO + TeacherKL
+```
+
+必须注意：
+
+| 项目                  | 要求                                                           |
+| ------------------- | ------------------------------------------------------------ |
+| hidden state reset  | episode reset / deploy 切换 RL 时清零                             |
+| sequence mini-batch | PPO update 要支持 recurrent sequence                            |
+| TeacherKL           | teacher 不需要 recurrent，student action distribution 对齐 teacher |
+| export              | ONNX/TorchScript 要能输出 hidden next                            |
+| deploy              | C++ 端保存 h/c                                                  |
+
+---
+
+## 7. LSTM 实机
+
+如果 LSTM 仿真能稳定上楼，尽快实机，不要等完美。
+
+实机顺序：
+
+```text
+零命令站稳
+↓
+平地 vx=0.1
+↓
+平地 vx=0.2
+↓
+停止响应
+↓
+转向
+↓
+单个低台阶
+↓
+连续楼梯
+```
+
+建议 trial：
+
+| 场景 | trial |
+| -- | ----: |
+| 平地 |     5 |
+| 停止 |     3 |
+| 转向 |     3 |
+| 楼梯 |     5 |
+
+LSTM 是你 8 月底前最应该争取的第二个实机模型。
+
+---
+
+# 第五阶段：普通 Transformer-H16 + TeacherKL
+
+## 8. 实现普通 Transformer-H16
+
+优先级：**高。**
+
+结构建议：
+
+```text
+token_t = [obs_t, last_action_t]
+最近 16 个 token
+      ↓
+MLP token embedding
+      ↓
+positional encoding
+      ↓
+causal Transformer
+      ↓
+action head
+```
+
+推荐参数：
+
+| 参数             |             建议 |
+| -------------- | -------------: |
+| context length |             16 |
+| d_model        |      128 或 192 |
+| layers         |          2 或 4 |
+| heads          |              4 |
+| z/action head  | MLP [256, 128] |
+
+---
+
+## 9. 是否用跳帧
+
+建议做两个版本之一：
+
+### 基础版
+
+```text
+Transformer-H16-contiguous
+[t-15, ..., t]
+```
+
+### 更推荐版
+
+```text
+Transformer-H16-dense+sparse
+最近 8 帧连续 + 更早 8 帧稀疏
+```
+
+例如：
+
+```text
+[t-23, t-21, t-19, t-17, t-15, t-13, t-11, t-9,
+ t-7, t-6, t-5, t-4, t-3, t-2, t-1, t]
+```
+
+这个对楼梯更合理，因为能兼顾：
+
+```text
+短期接触细节
++
+较长时间的楼梯反馈
+```
+
+但第一版可以先连续 16 帧，别一开始复杂化。
+
+---
+
+## 10. Transformer 实机
+
+普通 Transformer-H16 如果仿真稳定，建议实机。
+
+实机目标不是一定上 4 层楼梯，最低目标是：
+
+```text
+平地稳定
+简单台阶可过
+最好能上连续楼梯
+```
+
+如果 Transformer 实机不如 LSTM，也不是失败。可以写成：
+
+> Transformer has stronger simulated representation capacity but is more sensitive to deployment mismatch.
+
+---
+
+# 第六阶段：显式 Stair Latent
+
+这是你的创新模块，但一定放在普通模型之后。
+
+## 11. 先做 Transformer + auxiliary prediction head
+
+优先级：**中高，但先仿真。**
+
+结构：
+
+```text
+history
+  ↓
+Transformer
+  ↓
+h_t
+  ↓              ↓
+action head     prediction head
+```
+
+prediction head 预测：
+
+| 输出                 | 类型                  |
+| ------------------ | ------------------- |
+| terrain_type       | classification      |
+| step_height        | regression          |
+| toe_collision_risk | binary / regression |
+
+这一步的作用：
+
+> 证明 Transformer hidden state 里确实有楼梯信息。
+
+它不一定实机。
+
+---
+
+## 12. 再做 Transformer + explicit stair latent
+
+优先级：**最高创新点。**
+
+结构：
+
+```text
+history
+  ↓
+Transformer encoder
+  ↓
+z_stair
+  ↓
+[current_obs, z_stair]
+  ↓
+actor
+  ↓
+action
+```
+
+同时：
+
+```text
+z_stair → terrain_type
+z_stair → step_height
+z_stair → toe_collision_risk
+```
+
+推荐：
+
+| 参数                    |                    建议 |
+| --------------------- | --------------------: |
+| z_stair_dim           |                    16 |
+| prediction head       |                 小 MLP |
+| actor input           | current_obs + z_stair |
+| auxiliary loss weight |                 小权重起步 |
+
+训练 loss：
+
+```text
+PPO loss
++ TeacherKL loss
++ auxiliary prediction loss
++ toe collision / clearance reward
+```
+
+---
+
+## 13. LSTM + Stair Latent
+
+是否需要？
+
+我的建议：
+
+> **仿真里建议做，实机可选。**
+
+原因：
+
+如果你只给 Transformer 加 latent，审稿人会问：
+
+> LSTM 加同样 latent 会不会也提升？
+
+所以至少做：
+
+```text
+LSTM
+vs
+LSTM + Stair Latent
+```
+
+但不一定实机。
+
+如果 LSTM + Latent 仿真非常强，而且部署比 Transformer 稳，那它可能成为最终主方法。
+
+---
+
+# 第七阶段：Latent 评估实验
+
+## 14. 专门设计 stair latent 仿真实验
+
+这组主要仿真即可。
+
+### 实验 A：未知楼梯尺寸
+
+训练：
+
+```text
+step height: 4–8 cm
+```
+
+测试：
+
+```text
+step height: 9–12 cm
+```
+
+比较：
+
+```text
+Transformer-H16
+Transformer-H16 + Latent
+LSTM
+LSTM + Latent
+```
+
+指标：
+
+| 指标                  |
+| ------------------- |
+| stair success rate  |
+| toe collision count |
+| stumble count       |
+| foot clearance      |
+| fall rate           |
+| tracking error      |
+
+---
+
+### 实验 B：stair A → flat → stair B
+
+流程：
+
+```text
+flat → stair A → flat → stair B → flat
+```
+
+你要画：
+
+| 曲线                     | 目的               |
+| ---------------------- | ---------------- |
+| predicted step_height  | 看是否能重新估计楼梯       |
+| predicted terrain_type | 看是否识别 flat/stair |
+| toe_collision_risk     | 看进入楼梯时是否升高       |
+| toe_collision count    | 看前几步后是否下降        |
+| foot clearance         | 看是否主动提高          |
+| z_stair PCA            | 看 latent 是否分区    |
+
+这个实验非常适合证明你的核心想法。
+
+---
+
+# 第八阶段：最终实机安排
+
+因为你 8 月底后不能做实机，实机任务必须提前锁定。
+
+## 必须实机的模型
+
+| 模型                          |     是否必须 |
+| --------------------------- | -------: |
+| MLP-H3                      | 已有，但要补统计 |
+| LSTM + TeacherKL            |   强烈建议必须 |
+| Transformer-H16 + TeacherKL |   强烈建议必须 |
+| Best Stair-Latent Policy    |  如果稳定，必须 |
+
+这里的 **Best Stair-Latent Policy** 可以是：
+
+```text
+Transformer + Latent
+```
+
+也可以是：
+
+```text
+LSTM + Latent
+```
+
+不要强迫两个 latent 模型都实机。
+
+---
+
+## 可选实机
+
+| 模型                     | 说明                          |
+| ---------------------- | --------------------------- |
+| MLP-H16                | 公平 baseline，仿真足够            |
+| LSTM + Latent          | 如果它比 Transformer + Latent 稳 |
+| Transformer + Aux only | 不需要实机                       |
+| MLP-H1                 | 不建议实机                       |
+
+---
+
+## 实机场景
+
+每个必须实机模型都做：
+
+| 场景        | trial |
+| --------- | ----: |
+| RL 切换安全   |   3–5 |
+| 零命令站稳     |     3 |
+| 平地 vx=0.2 |     5 |
+| 停止响应      |     3 |
+| 左右转向      |     3 |
+| 上楼梯       |     5 |
+
+Final best policy 额外做：
+
+| 场景                   | trial |
+| -------------------- | ----: |
+| flat → stairs → flat |     5 |
+| 轻微推扰                 |     3 |
+| 轻负重平地                |    可选 |
+
+---
+
+# 最终任务顺序
+
+## 第 0 步：今天就做
+
+```text
+冻结 MLP-H3 成功版本
+整理已有实机视频
+补 MLP-H3 实机统计
+建立统一 eval 指标
+```
+
+---
+
+## 第 1 步：先补公平 baseline
+
+```text
+MLP-H16 + TeacherKL 仿真
+MLP-H1 仿真，可选但建议
+```
+
+---
+
+## 第 2 步：做 LSTM
+
+```text
+LSTM + TeacherKL 训练
+LSTM eval
+LSTM export
+LSTM 实机
+```
+
+---
+
+## 第 3 步：做普通 Transformer
+
+```text
+Transformer-H16 + TeacherKL
+Transformer eval
+Transformer export
+Transformer 实机
+```
+
+---
+
+## 第 4 步：做 latent 方法
+
+```text
+Transformer + Aux
+Transformer + Explicit Stair Latent
+LSTM + Stair Latent 仿真
+选择 best latent policy
+best latent policy 实机
+```
+
+---
+
+## 第 5 步：补仿真分析
+
+```text
+toe collision rate
+stumble count
+foot clearance
+unknown stair generalization
+stair A → flat → stair B
+latent prediction curves
+hidden state / z_stair PCA
+```
+
+---
+
+## 第 6 步：补 supplement
+
+```text
+KL schedule
+KL clamp
+terrain height sweep
+friction/noise/delay
+reward ablation
+```
+
+这些全部放后面，不要抢主线时间。
+
+---
+
+# 一句话总结
+
+你现在的任务顺序应该是：
+
+```text
+1. 冻结并统计 MLP-H3 实机 baseline
+2. 做 MLP-H16 TeacherKL 仿真公平 baseline
+3. 做 LSTM TeacherKL，并尽快实机
+4. 做普通 Transformer-H16 TeacherKL，并尽快实机
+5. 再做 Transformer + Stair Latent
+6. LSTM + Stair Latent 至少仿真对照
+7. 脚碰撞率、stumble、foot clearance 全部主要在仿真统计
+8. 实机只统计成功率、失败类型、视频标注和安全事件
+```
+
+你的论文主线最终应该是：
+
+> **从 MLP-H3 已验证的真实盲走楼梯 baseline 出发，系统比较 LSTM/Transformer temporal memory，并进一步提出显式 stair latent，使 blind policy 能从本体接触历史中估计楼梯相关信息、减少后续脚尖碰撞并提升未知楼梯适应性。**

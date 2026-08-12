@@ -1,0 +1,126 @@
+'''
+5.9成功盲走参数记录
+terrain:
+  train_terrain: BLIND_HIGH_STAIRS_TERRAINS_CFG
+  play_terrain: BLIND_HIGH_STAIRS_TERRAINS_CFG
+  play_step_height_range: [0.14, 0.14]
+  max_init_terrain_level: 2
+
+teacher_kl:
+  checkpoint_path: /home/ubt2204/work/mjlab_new/mjlab_new/logs/rsl_rl/g1_velocity_teacher/2026-04-29_19-29-39/model_84250.pt
+  lambda_start: 0.5
+  lambda_end: 0.0
+  warmup_iters: 0
+  constant_iters: 0
+  anneal_iters: 3000
+  schedule: cosine
+  max_kl_loss: 10.0
+
+ppo:
+  learning_rate: 1.0e-3
+  schedule: adaptive
+  gamma: 0.99
+  lam: 0.95
+  desired_kl: 0.01
+  max_grad_norm: 1.0
+  entropy_coef: 0.01
+  num_learning_epochs: 5
+  num_mini_batches: 4
+
+policy:
+  hidden_dims: [512, 256, 128]
+  activation: elu
+  obs_normalization: true
+  init_std: 1.0
+  std_type: scalar
+
+runner:
+  num_steps_per_env: 24
+  max_iterations: 40001
+  save_interval: 50
+
+actuator_delay:
+  delay_min_lag: 0
+  delay_max_lag: 0
+  delay_hold_prob: 0.0
+  delay_update_period: 0
+
+observation:
+  actor_history_length: 3
+  critic_history_length: 3
+  actor_blind: true
+  actor_removed_height_scan: true
+
+obs_delay:
+  base_ang_vel:
+    delay_min_lag: 0
+    delay_max_lag: 1
+    delay_hold_prob: 0.8
+    delay_update_period: 5
+  projected_gravity:
+    delay_min_lag: 0
+    delay_max_lag: 1
+    delay_hold_prob: 0.8
+    delay_update_period: 5
+  joint_pos_rel:
+    delay_min_lag: 0
+    delay_max_lag: 1
+    delay_hold_prob: 0.8
+    delay_update_period: 5
+  joint_vel_rel:
+    delay_min_lag: 0
+    delay_max_lag: 1
+    delay_hold_prob: 0.8
+    delay_update_period: 5
+
+noise:
+  base_ang_vel: [-0.3, 0.3]
+  projected_gravity: [-0.07, 0.07]
+  joint_pos_rel: [-0.015, 0.015]
+  joint_vel_rel: [-2.0, 2.0]
+
+sim_contact:
+  nconmax: 256
+  njmax: 4096
+  ccd_iterations: 50
+  contact_sensor_maxmatch: 128
+
+pose:
+  ankle_pitch_std_walking: 0.25
+
+reward_overrides:
+  joint_acc_l2_weight: -2.5e-7
+  action_acc_l2_weight: -0.05
+  body_ang_vel_weight: -0.08
+  angular_momentum_weight: -0.03
+
+command_curriculum:
+  stage_0:
+    step: 0
+    lin_vel_x: [-0.5, 0.8]
+    lin_vel_y: [-0.7, 0.7]
+    ang_vel_z: [-0.5, 0.5]
+  stage_1:
+    step: 72000
+    lin_vel_x: [-0.7, 1.0]
+    lin_vel_y: [-0.7, 0.7]
+    ang_vel_z: [-0.6, 0.6]
+  stage_2:
+    step: 1200000
+    lin_vel_x: [-1.0, 1.3]
+    lin_vel_y: [-1.0, 1.0]
+    ang_vel_z: [-0.8, 0.8]
+许训练实验，新增baseheightreawrd，修改clearance逻辑使其支持范围
+'''
+'''
+uv run python -m mjlab.scripts.train Mjlab-Velocity-Blind-Rough-TeacherKL-Unitree-G1 \
+  --agent.resume True \
+  --resume-new-run True \
+  --agent.load-run "旧run文件夹名或正则" \
+  --agent.load-checkpoint "model_.*.pt" \
+  --agent.run-name "continue_5p9_height_clearance" \
+  --env.scene.num-envs 4096
+'''
+uv run play Mjlab-Velocity-Blind-Rough-TeacherKL-Unitree-G1 
+--checkpoint-file logs/rsl_rl/g1_blind_rough_teacherkl/Mjlab-Velocity-Blind-Rough-TeacherKL-Unitree-G1/2026-05-13_15-09-08_1st_5.9/model_58000.pt  
+--num-envs 16  --viewer viser

@@ -1,0 +1,59 @@
+昨天加的cap失败了，今天试一试去掉max选择小lamda
+这个kl的收敛效果远不如普通ppo：原因是有heightscan
+
+
+给我teacherkl任务加开关，是否启用teacher
+
+新命令：
+uv run python -m mjlab.scripts.train Mjlab-Velocity-Blind-Rough-TeacherKL-Unitree-G1 \
+  --agent.algorithm.teacher-kl-cfg.enabled False \
+  --env.scene.num-envs 4096 \
+  --agent.logger tensorboard
+  
+
+
+改动：
+改好了。现在 `Mjlab-Velocity-Blind-Rough-TeacherKL-Unitree-G1` 不再用强 full Gaussian KL，而是用 delayed weak action-mean Huber guidance。
+
+核心改动：
+
+- [ppo_teacher_kl.py](/home/ubt2204/work/111/mjlab_111/mjlab_111/third_party/rsl_rl/rsl_rl/algorithms/ppo_teacher_kl.py:59)：新增 `loss_type = kl | mean_mse | mean_huber`，mean-only loss 只约束 action mean，不再惩罚 student/teacher 的 std mismatch。
+- [rl_cfg.py](/home/ubt2204/work/111/mjlab_111/mjlab_111/src/mjlab/tasks/velocity/config/g1/rl_cfg.py:127)：G1 TeacherKL 配置改成：
+  - `loss_type="mean_huber"`
+  - `lambda_start=0.03`
+  - `lambda_end=0.005`
+  - `warmup_iters=1500`
+  - `anneal_iters=20000`
+  - `huber_delta=0.5`
+  - `max_teacher_loss=3.0`
+  - `max_kl_loss=None`
+- [config.py](/home/ubt2204/work/111/mjlab_111/mjlab_111/src/mjlab/rl/config.py:94)：配置类也支持这些新字段。
+- [test_ppo_teacher_kl.py](/home/ubt2204/work/111/mjlab_111/mjlab_111/third_party/rsl_rl/tests/algorithms/test_ppo_teacher_kl.py:45)：加了单测，确认 mean-Huber 不会因为 std 不同产生 loss，同时 cap 生效。
+
+我也确认了两个 TeacherKL 任务现在都是：
+
+```text
+teacher obs: ('teacher', 'camera')
+loss: mean_huber
+lambda: 0.03 -> 0.005
+warmup: 1500
+anneal: 10000
+huber_delta: 0.5
+cap: 3.0
+```
+
+验证过：
+
+```text
+5 passed
+python -m py_compile passed
+```
+
+你现在直接用原来的 TeacherKL task 跑就行；TensorBoard 里重点看 `teacher_mean_huber`、`teacher_loss_for_update`、`teacher_action_mean_l2`、`teacher_kl`、`teacher_lambda`。其中 `teacher_kl` 现在主要是诊断，不再作为训练 loss。
+
+
+
+
+今日收获：
+1-调节kl超参数，训练证明了teacherkl的优越性，严格对比实验，为今后的一系列实验打下基础
+2-写好了新的eval环境和指标

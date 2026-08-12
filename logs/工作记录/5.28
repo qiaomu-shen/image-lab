@@ -1,0 +1,4 @@
+开始训练boolean，mlp，53，teacher，目的是可部署一键切换
+开始研究latent写法，尝试加入lstm，换不同的种子跑teacher和ppo三组，取平均绘图--完成初步试验
+
+成功跑il，rl，kl对比实验，三个子任务在Mjlab-Velocity-Blind-Rough-TeacherKL-Unitree-G1下

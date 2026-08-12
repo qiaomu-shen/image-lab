@@ -1,0 +1,18 @@
+新建了评估系统，压缩最后一层为2维向量来做地形的聚类，但是目前的mlp策略没有明显的区分
+新建了lstm＋teacher联合训练，发信春lstm网络收敛较慢，加入teacher收敛变快，但又异常波动，不知道为什么
+同步了两个分支的评估系统
+复现boolean的策略，新建任务Mjlab-Velocity-Blind-StairsFlag-TeacherKL-Unitree-G1
+统一现在actor为5，critic为3，可能需要重新训练mlp策略，目前mlp是actor和critic都是3，lstm为53
+
+在blindkl，lstm，flag任务同步脚尖碰撞台阶惩罚，参数为-1.5
+
+在这三个任务同步目标点导航替代普通随机方向速度命令，除了lstm
+
+teacher更平滑加一个cap，现在只有lstm有，现在main里也加上了
+
+teacherkl任务的 resampling_time_range=(8.0, 13.0),   脚尖碰撞惩罚-1.5
+
+
+训练mlp53，teacher开关任务
+
+做了带teacher和普通ppo的对比实验
