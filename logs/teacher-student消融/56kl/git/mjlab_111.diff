@@ -1,0 +1,33 @@
+--- git commit ---
+07edfb9a3e61f01d8754e932e6bde51a07a1aeb5
+
+
+--- git status ---
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   src/mjlab/tasks/velocity/config/g1/rl_cfg.py
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/src/mjlab/tasks/velocity/config/g1/rl_cfg.py b/src/mjlab/tasks/velocity/config/g1/rl_cfg.py
+index 201ad311..7bb95ba9 100644
+--- a/src/mjlab/tasks/velocity/config/g1/rl_cfg.py
++++ b/src/mjlab/tasks/velocity/config/g1/rl_cfg.py
+@@ -149,9 +149,9 @@ def unitree_g1_blind_rough_teacherkl_runner_cfg() -> RslRlTeacherKLRunnerCfg:
+       "teacher": ("teacher", "camera"),
+     },
+     experiment_name="g1_blind_rough_teacherkl",
+-    save_interval=50,
++    save_interval=1000,
+     num_steps_per_env=24,
+-    max_iterations=40_001,
++    max_iterations=13_001,
+   )
+ 
+ 

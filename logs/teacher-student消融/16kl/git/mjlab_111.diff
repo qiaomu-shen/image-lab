@@ -1,0 +1,214 @@
+--- git commit ---
+78713734d9a4ec41feff07198e099f70bb920bc5
+
+
+--- git status ---
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   src/mjlab/rl/config.py
+	modified:   third_party/rsl_rl/rsl_rl/algorithms/ppo_teacher_kl.py
+	modified:   third_party/rsl_rl/rsl_rl/runners/on_policy_runner.py
+	modified:   third_party/rsl_rl/tests/algorithms/test_ppo_teacher_kl.py
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/src/mjlab/rl/config.py b/src/mjlab/rl/config.py
+index 09dfa99b..7edce0e8 100644
+--- a/src/mjlab/rl/config.py
++++ b/src/mjlab/rl/config.py
+@@ -135,6 +135,8 @@ class RslRlTeacherKLCfg:
+   """Teacher guidance weight schedule."""
+   huber_delta: float = 1.0
+   """Delta parameter for ``loss_type='mean_huber'``."""
++  teacher_forward_chunk_size: int = 4096
++  """Maximum flattened samples per frozen-teacher forward pass."""
+   max_teacher_loss: float | None = None
+   """Optional hard cap applied to mean-only teacher guidance losses."""
+   max_kl_loss: float | None = 10.0
+diff --git a/third_party/rsl_rl/rsl_rl/algorithms/ppo_teacher_kl.py b/third_party/rsl_rl/rsl_rl/algorithms/ppo_teacher_kl.py
+index fd12b453..3007dfd3 100644
+--- a/third_party/rsl_rl/rsl_rl/algorithms/ppo_teacher_kl.py
++++ b/third_party/rsl_rl/rsl_rl/algorithms/ppo_teacher_kl.py
+@@ -8,18 +8,17 @@ from __future__ import annotations
+ 
+ import copy
+ import math
+-from typing import Any
+-
+ import torch
+-import torch.nn.functional as F
++import torch.nn.functional as functional
+ from tensordict import TensorDict
++from typing import Any
+ 
+ from rsl_rl.algorithms.ppo import PPO
+ from rsl_rl.env import VecEnv
+ from rsl_rl.extensions import resolve_rnd_config, resolve_symmetry_config
+ from rsl_rl.models import MLPModel
+ from rsl_rl.storage import RolloutStorage
+-from rsl_rl.utils import resolve_callable, resolve_obs_groups
++from rsl_rl.utils import resolve_callable, resolve_obs_groups, unpad_trajectories
+ 
+ 
+ class PPOTeacherKL(PPO):
+@@ -69,6 +68,9 @@ class PPOTeacherKL(PPO):
+         self.teacher_guidance_huber_delta = float(self.teacher_kl_cfg.get("huber_delta", 1.0))
+         if self.teacher_guidance_huber_delta <= 0.0:
+             raise ValueError("teacher_kl_cfg.huber_delta must be positive.")
++        self.teacher_forward_chunk_size = int(self.teacher_kl_cfg.get("teacher_forward_chunk_size", 2048))
++        if self.teacher_forward_chunk_size <= 0:
++            raise ValueError("teacher_kl_cfg.teacher_forward_chunk_size must be positive.")
+         max_teacher_loss = self.teacher_kl_cfg.get("max_teacher_loss", self.teacher_kl_cfg.get("max_loss"))
+         self.teacher_guidance_max_loss = None if max_teacher_loss is None else float(max_teacher_loss)
+ 
+@@ -85,6 +87,7 @@ class PPOTeacherKL(PPO):
+                 "anneal_iters": self.teacher_kl_anneal_iters,
+                 "schedule": self.teacher_kl_schedule,
+                 "huber_delta": self.teacher_guidance_huber_delta,
++                "teacher_forward_chunk_size": self.teacher_forward_chunk_size,
+                 "max_teacher_loss": self.teacher_guidance_max_loss,
+                 "log_kl_when_lambda_zero": self.teacher_kl_cfg.get("log_kl_when_lambda_zero", True),
+             }
+@@ -245,7 +248,7 @@ class PPOTeacherKL(PPO):
+             mean_loss = (student_mean - teacher_mean).pow(2).sum(dim=-1).mean()
+             loss_key = "teacher_mean_mse"
+         elif self.teacher_guidance_loss_type == "mean_huber":
+-            mean_loss = F.smooth_l1_loss(
++            mean_loss = functional.smooth_l1_loss(
+                 student_mean,
+                 teacher_mean,
+                 beta=self.teacher_guidance_huber_delta,
+@@ -334,6 +337,45 @@ class PPOTeacherKL(PPO):
+             loss_weight=teacher_kl_lambda,
+         )
+ 
++    def _compute_teacher_distribution_params(
++        self,
++        observations: TensorDict,
++        masks: torch.Tensor | None,
++    ) -> tuple[torch.Tensor, ...]:
++        """Run the frozen teacher in chunks to cap CNN activation memory."""
++        if self.teacher is None:
++            raise RuntimeError("Teacher guidance loss requires a loaded teacher model.")
++
++        if masks is not None:
++            observations = unpad_trajectories(observations, masks)
++
++        batch_shape = tuple(observations.batch_size)
++        num_samples = math.prod(batch_shape) if batch_shape else 1
++        flat_observations = TensorDict(
++            {
++                key: value.reshape(num_samples, *value.shape[len(batch_shape) :])
++                for key, value in observations.items()
++            },
++            batch_size=[num_samples],
++            device=observations.device,
++        )
++
++        param_chunks: list[list[torch.Tensor]] | None = None
++        for start in range(0, num_samples, self.teacher_forward_chunk_size):
++            chunk = flat_observations[start : start + self.teacher_forward_chunk_size]
++            self.teacher(chunk, stochastic_output=True)
++            chunk_params = tuple(param.detach() for param in self.teacher.output_distribution_params)
++            if param_chunks is None:
++                param_chunks = [[] for _ in chunk_params]
++            for chunks, param in zip(param_chunks, chunk_params):
++                chunks.append(param)
++
++        if param_chunks is None:
++            return ()
++
++        flat_params = tuple(torch.cat(chunks, dim=0) for chunks in param_chunks)
++        return tuple(param.reshape(*batch_shape, *param.shape[1:]) for param in flat_params)
++
+     def _compute_teacher_guidance_loss(
+         self,
+         batch: RolloutStorage.Batch,
+@@ -352,8 +394,10 @@ class PPOTeacherKL(PPO):
+         teacher_masks = batch.masks[:original_batch_size] if batch.masks is not None else None
+ 
+         with torch.no_grad():
+-            self.teacher(teacher_observations, masks=teacher_masks, stochastic_output=True)
+-            teacher_distribution_params = tuple(p.detach() for p in self.teacher.output_distribution_params)
++            teacher_distribution_params = self._compute_teacher_distribution_params(
++                teacher_observations,
++                teacher_masks,
++            )
+ 
+         student_distribution_params = distribution_params
+         if loss_weight == 0.0:
+@@ -409,10 +453,7 @@ class PPOTeacherKL(PPO):
+ 
+     def update(self) -> dict[str, float]:
+         """Run a PPO update and advance the teacher-KL schedule."""
+-        if self.teacher_imitation_only:
+-            loss_dict = self._update_teacher_imitation_only()
+-        else:
+-            loss_dict = super().update()
++        loss_dict = self._update_teacher_imitation_only() if self.teacher_imitation_only else super().update()
+         self.teacher_kl_iteration += 1
+         return loss_dict
+ 
+diff --git a/third_party/rsl_rl/rsl_rl/runners/on_policy_runner.py b/third_party/rsl_rl/rsl_rl/runners/on_policy_runner.py
+index 2c2e661b..3e4f712a 100644
+--- a/third_party/rsl_rl/rsl_rl/runners/on_policy_runner.py
++++ b/third_party/rsl_rl/rsl_rl/runners/on_policy_runner.py
+@@ -106,6 +106,8 @@ class OnPolicyRunner:
+ 
+             # Update policy
+             loss_dict = self.alg.update()
++            if str(self.device).startswith("cuda") and torch.cuda.is_available():
++                torch.cuda.empty_cache()
+ 
+             stop = time.time()
+             learn_time = stop - start
+diff --git a/third_party/rsl_rl/tests/algorithms/test_ppo_teacher_kl.py b/third_party/rsl_rl/tests/algorithms/test_ppo_teacher_kl.py
+index a711108d..1fe5c927 100644
+--- a/third_party/rsl_rl/tests/algorithms/test_ppo_teacher_kl.py
++++ b/third_party/rsl_rl/tests/algorithms/test_ppo_teacher_kl.py
+@@ -111,6 +111,39 @@ def test_disabled_guidance_runs_without_teacher() -> None:
+     assert logs["teacher_guidance_enabled"] == 0.0
+ 
+ 
++def test_teacher_forward_chunking_matches_full_batch() -> None:
++    """Chunked teacher inference should preserve distribution parameters."""
++    alg = _build_teacher_kl({"teacher_forward_chunk_size": 3})
++    obs = TensorDict(
++        {"teacher": torch.randn(NUM_STEPS, NUM_ENVS, OBS_DIM)},
++        batch_size=[NUM_STEPS, NUM_ENVS],
++    )
++    init_obs = TensorDict(
++        {"teacher": torch.zeros(NUM_ENVS, OBS_DIM)},
++        batch_size=[NUM_ENVS],
++    )
++    masks = torch.ones(NUM_STEPS, NUM_ENVS, dtype=torch.bool)
++    obs_groups = {"teacher": ["teacher"]}
++    alg.teacher = MLPModel(
++        init_obs,
++        obs_groups,
++        "teacher",
++        NUM_ACTIONS,
++        hidden_dims=[16],
++        distribution_cfg={"class_name": "GaussianDistribution"},
++    )
++    alg.teacher_loaded = True
++    alg._freeze_teacher()
++
++    with torch.no_grad():
++        alg.teacher(obs, masks=masks, stochastic_output=True)
++        full_params = tuple(param.detach().clone() for param in alg.teacher.output_distribution_params)
++        chunked_params = alg._compute_teacher_distribution_params(obs, masks)
++
++    for full, chunked in zip(full_params, chunked_params):
++        torch.testing.assert_close(chunked, full)
++
++
+ def test_construct_disabled_guidance_skips_teacher_loading() -> None:
+     """Disabled teacher guidance should not construct or load the teacher."""
+     obs = TensorDict(

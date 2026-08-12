@@ -1,0 +1,291 @@
+--- git commit ---
+07edfb9a3e61f01d8754e932e6bde51a07a1aeb5
+
+
+--- git status ---
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   src/mjlab/rl/__init__.py
+	modified:   src/mjlab/rl/config.py
+	modified:   src/mjlab/rl/spatial_softmax.py
+	modified:   src/mjlab/tasks/velocity/config/g1/__init__.py
+	modified:   src/mjlab/tasks/velocity/config/g1/blind_rough_teacher_kl_env_cfg.py
+	modified:   src/mjlab/tasks/velocity/config/g1/rl_cfg.py
+	modified:   src/mjlab/utils/lstm.py
+	modified:   tests/test_runner.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	src/mjlab/rl/slow_latent_model.py
+	tests/test_slow_latent_model.py
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/src/mjlab/rl/__init__.py b/src/mjlab/rl/__init__.py
+index d1f6a032..810f0a34 100644
+--- a/src/mjlab/rl/__init__.py
++++ b/src/mjlab/rl/__init__.py
+@@ -5,6 +5,7 @@ from mjlab.rl.config import RslRlPpoAlgorithmCfg as RslRlPpoAlgorithmCfg
+ from mjlab.rl.config import (
+   RslRlPpoTeacherKLAlgorithmCfg as RslRlPpoTeacherKLAlgorithmCfg,
+ )
++from mjlab.rl.config import RslRlSlowLatentModelCfg as RslRlSlowLatentModelCfg
+ from mjlab.rl.config import RslRlTeacherKLCfg as RslRlTeacherKLCfg
+ from mjlab.rl.config import RslRlTeacherKLRunnerCfg as RslRlTeacherKLRunnerCfg
+ from mjlab.rl.runner import MjlabOnPolicyRunner as MjlabOnPolicyRunner
+diff --git a/src/mjlab/rl/config.py b/src/mjlab/rl/config.py
+index 08334c88..69555103 100644
+--- a/src/mjlab/rl/config.py
++++ b/src/mjlab/rl/config.py
+@@ -38,6 +38,28 @@ class RslRlModelCfg:
+   """Model class name resolved by RSL-RL (MLPModel, CNNModel, or RNNModel)."""
+ 
+ 
++@dataclass
++class RslRlSlowLatentModelCfg(RslRlModelCfg):
++  """Config for an LSTM encoder + slow latent + MLP actor model."""
++
++  class_name: str = "mjlab.rl.slow_latent_model:LSTMSlowLatentMLPModel"
++  """Qualified model class name for the slow-latent actor."""
++  use_slow_latent: bool = True
++  """Enable explicit slow terrain latent conditioning."""
++  latent_dim: int = 16
++  """Dimension of the slow terrain latent z_t."""
++  latent_hidden_dim: int = 256
++  """Hidden dimension of the latent encoder LSTM."""
++  latent_alpha: float = 0.1
++  """EMA update rate for z_t. Set to 1.0 for the no-slow-update ablation."""
++  encoder_type: Literal["lstm"] = "lstm"
++  """Recurrent encoder type. The first implementation uses LSTM."""
++  rnn_type: str | None = "lstm"
++  """Keep RSL-RL recurrent storage enabled for the latent encoder."""
++  rnn_hidden_dim: int = 256
++  """RSL-RL-style recurrent field; use latent_hidden_dim for this model."""
++
++
+ @dataclass
+ class RslRlPpoAlgorithmCfg:
+   """Config for the PPO algorithm."""
+diff --git a/src/mjlab/rl/spatial_softmax.py b/src/mjlab/rl/spatial_softmax.py
+index 170bf451..8a6db5e9 100644
+--- a/src/mjlab/rl/spatial_softmax.py
++++ b/src/mjlab/rl/spatial_softmax.py
+@@ -112,8 +112,11 @@ class SpatialSoftmaxCNN(nn.Module):
+     return None
+ 
+   def forward(self, x: torch.Tensor) -> torch.Tensor:
+-    features = self.cnn(x)
+-    return self.spatial_softmax(features)
++    leading_shape = x.shape[:-3]
++    x_flat = x.reshape(-1, *x.shape[-3:])
++    features = self.cnn(x_flat)
++    keypoints = self.spatial_softmax(features)
++    return keypoints.reshape(*leading_shape, -1)
+ 
+ 
+ class SpatialSoftmaxCNNModel(CNNModel):
+diff --git a/src/mjlab/tasks/velocity/config/g1/__init__.py b/src/mjlab/tasks/velocity/config/g1/__init__.py
+index d8f29fca..e622f3e4 100644
+--- a/src/mjlab/tasks/velocity/config/g1/__init__.py
++++ b/src/mjlab/tasks/velocity/config/g1/__init__.py
+@@ -1,7 +1,10 @@
+ from mjlab.tasks.registry import register_mjlab_task
+ from mjlab.tasks.velocity.rl import VelocityOnPolicyRunner
+ 
+-from .blind_rough_teacher_kl_env_cfg import unitree_g1_blind_rough_teacherkl_env_cfg
++from .blind_rough_teacher_kl_env_cfg import (
++  unitree_g1_blind_rough_target_navigation_slow_latent_env_cfg,
++  unitree_g1_blind_rough_teacherkl_env_cfg,
++)
+ from .env_cfgs import (
+   unitree_g1_blind_rough_env_cfg,
+   unitree_g1_flat_env_cfg,
+@@ -11,6 +14,7 @@ from .env_cfgs import (
+   unitree_g1_blind_target_heading_rough_env_cfg as unitree_g1_blind_target_heading_rough_env_cfg,
+ )
+ from .rl_cfg import (
++  unitree_g1_blind_rough_target_navigation_slow_latent_teacherkl_runner_cfg,
+   unitree_g1_blind_rough_target_navigation_teacherkl_runner_cfg,
+   unitree_g1_blind_rough_teacherkl_runner_cfg,
+   unitree_g1_ppo_runner_cfg,
+@@ -53,6 +57,16 @@ register_mjlab_task(
+   runner_cls=VelocityOnPolicyRunner,
+ )
+ 
++register_mjlab_task(
++  task_id="Mjlab-Velocity-Blind-Rough-TargetNavigation-SlowLatent-TeacherKL-Unitree-G1",
++  env_cfg=unitree_g1_blind_rough_target_navigation_slow_latent_env_cfg(),
++  play_env_cfg=unitree_g1_blind_rough_target_navigation_slow_latent_env_cfg(
++    play=True,
++  ),
++  rl_cfg=unitree_g1_blind_rough_target_navigation_slow_latent_teacherkl_runner_cfg(),
++  runner_cls=VelocityOnPolicyRunner,
++)
++
+ register_mjlab_task(
+   task_id="Mjlab-Velocity-TargetHeading-Rough-Teacher-Unitree-G1",
+   env_cfg=unitree_g1_target_heading_teacher_env_cfg(),
+diff --git a/src/mjlab/tasks/velocity/config/g1/blind_rough_teacher_kl_env_cfg.py b/src/mjlab/tasks/velocity/config/g1/blind_rough_teacher_kl_env_cfg.py
+index 99e8a029..17d26505 100644
+--- a/src/mjlab/tasks/velocity/config/g1/blind_rough_teacher_kl_env_cfg.py
++++ b/src/mjlab/tasks/velocity/config/g1/blind_rough_teacher_kl_env_cfg.py
+@@ -321,3 +321,16 @@ def unitree_g1_blind_rough_teacherkl_env_cfg(
+     twist_cmd.ranges.ang_vel_z = (-0.5, 0.5)
+ 
+   return cfg
++
++
++def unitree_g1_blind_rough_target_navigation_slow_latent_env_cfg(
++  play: bool = False,
++  actor_history_length: int = 3,
++) -> ManagerBasedRlEnvCfg:
++  """Target-navigation blind task for the slow-latent student actor."""
++  cfg = unitree_g1_blind_rough_teacherkl_env_cfg(
++    play=play,
++    use_target_navigation=True,
++  )
++  cfg.observations["actor"].history_length = actor_history_length
++  return cfg
+diff --git a/src/mjlab/tasks/velocity/config/g1/rl_cfg.py b/src/mjlab/tasks/velocity/config/g1/rl_cfg.py
+index 201ad311..f6f116dc 100644
+--- a/src/mjlab/tasks/velocity/config/g1/rl_cfg.py
++++ b/src/mjlab/tasks/velocity/config/g1/rl_cfg.py
+@@ -5,6 +5,7 @@ from mjlab.rl import (
+   RslRlOnPolicyRunnerCfg,
+   RslRlPpoAlgorithmCfg,
+   RslRlPpoTeacherKLAlgorithmCfg,
++  RslRlSlowLatentModelCfg,
+   RslRlTeacherKLCfg,
+   RslRlTeacherKLRunnerCfg,
+ )
+@@ -57,6 +58,28 @@ def _unitree_g1_depth_policy_model_cfg() -> RslRlModelCfg:
+   )
+ 
+ 
++def _unitree_g1_slow_latent_policy_model_cfg(
++  latent_alpha: float = 0.1,
++) -> RslRlSlowLatentModelCfg:
++  return RslRlSlowLatentModelCfg(
++    hidden_dims=(512, 256, 128),
++    activation="elu",
++    obs_normalization=True,
++    distribution_cfg={
++      "class_name": "GaussianDistribution",
++      "init_std": 1.0,
++      "std_type": "scalar",
++    },
++    latent_dim=16,
++    latent_hidden_dim=256,
++    latent_alpha=latent_alpha,
++    encoder_type="lstm",
++    rnn_type="lstm",
++    rnn_hidden_dim=256,
++    rnn_num_layers=1,
++  )
++
++
+ def unitree_g1_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+   """Create RL runner configuration for Unitree G1 velocity task."""
+   return RslRlOnPolicyRunnerCfg(
+@@ -149,9 +172,9 @@ def unitree_g1_blind_rough_teacherkl_runner_cfg() -> RslRlTeacherKLRunnerCfg:
+       "teacher": ("teacher", "camera"),
+     },
+     experiment_name="g1_blind_rough_teacherkl",
+-    save_interval=50,
++    save_interval=1000,
+     num_steps_per_env=24,
+-    max_iterations=40_001,
++    max_iterations=13_001,
+   )
+ 
+ 
+@@ -162,3 +185,15 @@ def unitree_g1_blind_rough_target_navigation_teacherkl_runner_cfg() -> (
+   cfg = unitree_g1_blind_rough_teacherkl_runner_cfg()
+   cfg.experiment_name = "g1_blind_rough_target_navigation_teacherkl"
+   return cfg
++
++
++def unitree_g1_blind_rough_target_navigation_slow_latent_teacherkl_runner_cfg(
++  latent_alpha: float = 0.1,
++  num_steps_per_env: int = 64,
++) -> RslRlTeacherKLRunnerCfg:
++  """Create Teacher-KL config with LSTM slow-latent student actor."""
++  cfg = unitree_g1_blind_rough_target_navigation_teacherkl_runner_cfg()
++  cfg.actor = _unitree_g1_slow_latent_policy_model_cfg(latent_alpha=latent_alpha)
++  cfg.num_steps_per_env = num_steps_per_env
++  cfg.experiment_name = "g1_blind_rough_target_navigation_slow_latent_teacherkl"
++  return cfg
+diff --git a/src/mjlab/utils/lstm.py b/src/mjlab/utils/lstm.py
+index 341e585d..77db668f 100644
+--- a/src/mjlab/utils/lstm.py
++++ b/src/mjlab/utils/lstm.py
+@@ -103,7 +103,35 @@ def get_recurrent_policy_metadata(policy: Any) -> dict[str, list | str | float]:
+     "policy_recurrent_state_step_rule": "feed h_out/c_out back as next h_in/c_in; zero state on reset",
+   }
+ 
+-  if rnn_type == "lstm":
++  slow_latent_dim = getattr(policy, "slow_latent_dim", None) or getattr(
++    policy, "latent_dim", None
++  )
++  if slow_latent_dim is not None:
++    metadata.update(
++      {
++        "policy_has_slow_latent": "true",
++        "policy_slow_latent_dim": str(slow_latent_dim),
++        "policy_slow_latent_alpha": str(
++          getattr(policy, "latent_alpha", getattr(policy, "slow_alpha", ""))
++        ),
++        "policy_recurrent_state_step_rule": (
++          "feed h_out/c_out/z_out back as next h_in/c_in/z_in; "
++          "zero h/c/z on reset; zero z only for slow-latent ablations"
++        ),
++      }
++    )
++  else:
++    metadata["policy_has_slow_latent"] = "false"
++
++  if rnn_type == "lstm" and slow_latent_dim is not None:
++    metadata.update(
++      {
++        "policy_onnx_input_names": ["obs", "h_in", "c_in", "z_in"],
++        "policy_onnx_output_names": ["actions", "h_out", "c_out", "z_out"],
++        "policy_recurrent_state_names": ["h", "c", "z"],
++      }
++    )
++  elif rnn_type == "lstm":
+     metadata.update(
+       {
+         "policy_onnx_input_names": ["obs", "h_in", "c_in"],
+diff --git a/tests/test_runner.py b/tests/test_runner.py
+index a64ad17d..36fa46bf 100644
+--- a/tests/test_runner.py
++++ b/tests/test_runner.py
+@@ -318,6 +318,22 @@ def test_cnn_onnx_export_matches_actor():
+   torch.testing.assert_close(actual, expected, atol=1e-6, rtol=0)
+ 
+ 
++def test_spatial_softmax_cnn_model_accepts_recurrent_camera_batches():
++  """CNN teacher batches from recurrent storage carry [time, batch, C, H, W]."""
++  actor = _make_cnn_actor(obs_normalization=False)
++  obs = TensorDict(
++    {
++      "actor": torch.randn(5, 7, _OBS_DIM_1D),
++      "camera": torch.randn(5, 7, _IMG_C, _IMG_H, _IMG_W),
++    },
++    batch_size=(5, 7),
++  )
++
++  out = actor(obs, masks=torch.ones(5, 7, dtype=torch.bool))
++
++  assert out.shape == (5, 7, _OUTPUT_DIM)
++
++
+ @pytest.mark.filterwarnings("ignore::DeprecationWarning")
+ def test_cnn_onnx_export_to_file():
+   """SpatialSoftmaxCNNModel exports to a valid ONNX file."""
